@@ -10,7 +10,7 @@ import os
 
 app = Flask(__name__)
 
-# Configuração global
+# Configurações globais
 BASE_URL = "https://animefire.plus"
 MIN_DELAY = 1  # segundos
 MAX_DELAY = 3  # segundos
@@ -32,25 +32,45 @@ class AnimeScraper:
 
     def scrape_recent(self):
         try:
-            # Delay ajustado sem usar *
+            # Adiciona delay aleatório
             delay = random.uniform(MIN_DELAY, MAX_DELAY)
             time.sleep(delay)
             
+            # Acessa a página
             self.driver.get(f"{BASE_URL}/animes-lancamentos/1")
+            
+            # Espera o carregamento
             WebDriverWait(self.driver, 20).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "div.divCardUltimosEps"))
             
+            # Scroll para simular comportamento humano
             self.driver.execute_script("window.scrollBy(0, 500);")
+            time.sleep(0.5)
             
+            # Parse do conteúdo
             soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-            return [
-                {
-                    "title": item.select_one('h3.animeTitle').get_text(strip=True),
-                    "image": item.select_one('img')['src'],
-                    "url": f"{BASE_URL}{item.select_one('a')['href']}"
-                }
-                for item in soup.select('div.divCardUltimosEps')[:10]
-            ]
+            results = []
+            
+            for item in soup.select('div.divCardUltimosEps')[:10]:  # Limite de 10 itens
+                try:
+                    title = item.select_one('h3.animeTitle').get_text(strip=True)
+                    image = item.select_one('img').get('src', '')
+                    link = item.select_one('a').get('href', '')
+                    
+                    if link and not link.startswith('http'):
+                        link = f"{BASE_URL}{link}"
+                    
+                    results.append({
+                        'title': title,
+                        'image': image,
+                        'url': link
+                    })
+                except Exception as e:
+                    print(f"Erro ao processar item: {str(e)}")
+                    continue
+            
+            return results
+            
         except Exception as e:
             raise Exception(f"Erro durante scraping: {str(e)}")
         finally:
@@ -58,15 +78,22 @@ class AnimeScraper:
 
 @app.route('/')
 def home():
-    return jsonify({"status": "online", "routes": ["/recent"]})
+    return jsonify({
+        "status": "online",
+        "endpoints": {
+            "/recent": "Últimos lançamentos"
+        }
+    })
 
 @app.route('/recent')
-def recent():
+def recent_animes():
     try:
         scraper = AnimeScraper()
+        data = scraper.scrape_recent()
         return jsonify({
             "status": "success",
-            "data": scraper.scrape_recent()
+            "count": len(data),
+            "data": data
         })
     except Exception as e:
         return jsonify({
@@ -74,5 +101,8 @@ def recent():
             "message": str(e)
         }), 500
 
-# Para o Gunicorn
+# Configuração para o Gunicorn
 application = app
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8000)
