@@ -12,7 +12,8 @@ app = Flask(__name__)
 
 # Configuração global
 BASE_URL = "https://animefire.plus"
-REQUEST_DELAY = (1, 3)  # Delay entre 1-3 segundos
+MIN_DELAY = 1  # segundos
+MAX_DELAY = 3  # segundos
 
 class AnimeScraper:
     def __init__(self):
@@ -31,12 +32,14 @@ class AnimeScraper:
 
     def scrape_recent(self):
         try:
+            # Delay ajustado sem usar *
+            delay = random.uniform(MIN_DELAY, MAX_DELAY)
+            time.sleep(delay)
+            
             self.driver.get(f"{BASE_URL}/animes-lancamentos/1")
             WebDriverWait(self.driver, 20).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "div.divCardUltimosEps"))
             
-            # Comportamento humano
-            time.sleep(random.uniform(*REQUEST_DELAY))
             self.driver.execute_script("window.scrollBy(0, 500);")
             
             soup = BeautifulSoup(self.driver.page_source, 'html.parser')
@@ -46,8 +49,10 @@ class AnimeScraper:
                     "image": item.select_one('img')['src'],
                     "url": f"{BASE_URL}{item.select_one('a')['href']}"
                 }
-                for item in soup.select('div.divCardUltimosEps')[:10]  # Limite de 10
+                for item in soup.select('div.divCardUltimosEps')[:10]
             ]
+        except Exception as e:
+            raise Exception(f"Erro durante scraping: {str(e)}")
         finally:
             self.driver.quit()
 
