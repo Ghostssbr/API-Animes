@@ -1,135 +1,104 @@
-import cloudscraper
-from bs4 import BeautifulSoup
-import hashlib
-import random
+import os
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import undetected_chromedriver as uc
 import time
-from urllib.parse import urljoin
-from functools import lru_cache
+import random
+import json
+from bs4 import BeautifulSoup
 
-# Configurações
-BASE_URL = "https://animefire.plus"
-REQUEST_DELAY = (1, 3)  # Delay aleatório entre 1-3 segundos
-MAX_RETRIES = 3
+class AnimeFireScraper:
+    def __init__(self):
+        self.BASE_URL = "https://animefire.plus"
+        self.setup_driver()
+        
+    def setup_driver(self):
+        """Configura o WebDriver com opções stealth"""
+        options = uc.ChromeOptions()
+        
+        # Configurações para o Render.com
+        if os.getenv('RENDER'):
+            options.add_argument('--headless=new')
+            options.add_argument('--no-sandbox')
+            options.add_argument('--disable-dev-shm-usage')
+            options.add_argument('--disable-gpu')
+        
+        # Configurações comuns
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_argument(f'user-agent={self.get_random_user_agent()}')
+        
+        self.driver = uc.Chrome(
+            options=options,
+            version_main=114  # Altere para a versão do seu Chrome
+        )
+        self.driver.set_page_load_timeout(30)
 
-# Cloudscraper configurado para bypass de proteções
-scraper = cloudscraper.create_scraper(
-    browser={
-        'browser': 'chrome',
-        'platform': 'windows',
-        'mobile': False
-    },
-    delay=10
-)
+    def get_random_user_agent(self):
+        """Rotaciona User-Agents"""
+        user_agents = [
+            # Lista de 10 user-agents modernos
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+            # Adicione mais user-agents aqui
+        ]
+        return random.choice(user_agents)
 
-# Headers personalizados
-HEADERS = {
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-    'Referer': BASE_URL,
-    'DNT': '1',
-    'Upgrade-Insecure-Requests': '1'
-}
+    def human_like_interaction(self):
+        """Simula comportamento humano"""
+        time.sleep(random.uniform(1, 3))
+        if random.random() > 0.7:
+            self.driver.execute_script("window.scrollBy(0, 500);")
+            time.sleep(0.5)
 
-def generate_id(text):
-    """Gera ID único para cada anime"""
-    return hashlib.md5(text.encode()).hexdigest()[:8]
-
-def make_request(url):
-    """Faz requisições com tratamento de erros e retry"""
-    for attempt in range(MAX_RETRIES):
+    def get_recent_animes(self, page=1):
         try:
-            time.sleep(random.uniform(*REQUEST_DELAY))
-            response = scraper.get(url, headers=HEADERS)
+            url = f"{self.BASE_URL}/animes-lancamentos/{page}"
+            self.driver.get(url)
             
-            # Verifica se foi bloqueado
-            if response.status_code == 403:
-                raise Exception("Bloqueado pelo servidor (403)")
-            if "cloudflare" in response.text.lower():
-                raise Exception("Desafio Cloudflare detectado")
-                
-            response.raise_for_status()
-            return response
+            # Espera carregar dinamicamente
+            WebDriverWait(self.driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "div.divCardUltimosEps"))
+            
+            self.human_like_interaction()
+            
+            # Extrai dados do DOM
+            soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+            animes = []
+            
+            for item in soup.select('div.divCardUltimosEps')[:10]:  # Limite de 10 itens
+                try:
+                    title = item.select_one('h3.animeTitle').get_text(strip=True)
+                    image = item.select_one('img').get('src', '')
+                    link = item.select_one('a').get('href', '')
+                    
+                    if not link.startswith('http'):
+                        link = f"{self.BASE_URL}{link}"
+                    
+                    animes.append({
+                        'title': title,
+                        'image': image,
+                        'url': link
+                    })
+                except Exception as e:
+                    continue
+            
+            return animes
             
         except Exception as e:
-            if attempt == MAX_RETRIES - 1:
-                raise Exception(f"Falha após {MAX_RETRIES} tentativas: {str(e)}")
-            time.sleep(2 ** attempt)  # Backoff exponencial
+            raise Exception(f"Erro no scraping: {str(e)}")
+        finally:
+            self.cleanup()
 
-@lru_cache(maxsize=32)
-def get_recent_animes(page=1):
-    """Busca os últimos animes lançados"""
-    try:
-        url = f"{BASE_URL}/animes-lancamentos/{page}"
-        response = make_request(url)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        animes = []
-        for item in soup.select('div.divCardUltimosEps'):
-            try:
-                title = item.select_one('h3.animeTitle').get_text(strip=True)
-                image = item.select_one('img')['src'] or item.select_one('img')['data-src']
-                link = urljoin(BASE_URL, item.select_one('a')['href'])
-                
-                animes.append({
-                    'id': generate_id(title),
-                    'title': title,
-                    'image': image,
-                    'url': link,
-                    'episodes': get_episode_count(link)  # Função auxiliar
-                })
-            except Exception as e:
-                print(f"Erro ao processar item: {str(e)}")
-                continue
-        
-        return animes[:15]  # Limita a 15 resultados
-        
-    except Exception as e:
-        raise Exception(f"Erro ao buscar animes recentes: {str(e)}")
+    def cleanup(self):
+        """Limpeza segura"""
+        try:
+            self.driver.quit()
+        except:
+            pass
 
-def get_episode_count(anime_url):
-    """Conta o número de episódios disponíveis"""
-    try:
-        response = make_request(anime_url)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        return len(soup.select('.div_video_list a.lEp'))
-    except:
-        return 0
-
-def get_episodes(anime_url, limit=10):
-    """Busca episódios de um anime específico"""
-    try:
-        response = make_request(anime_url)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        episodes = []
-        for ep in soup.select('.div_video_list a.lEp')[:limit]:
-            try:
-                ep_url = urljoin(BASE_URL, ep['href'])
-                episodes.append({
-                    'title': ep.get_text(strip=True),
-                    'url': ep_url,
-                    'video_url': extract_video_url(ep_url)  # Função avançada
-                })
-            except Exception as e:
-                print(f"Erro ao processar episódio: {str(e)}")
-                continue
-        
-        return episodes
-    except Exception as e:
-        raise Exception(f"Erro ao buscar episódios: {str(e)}")
-
-def extract_video_url(episode_url):
-    """Extrai URL do vídeo (requer análise adicional)"""
-    try:
-        response = make_request(episode_url)
-        # Implemente a extração real conforme a estrutura do site
-        return "https://example.com/video.mp4"  # Placeholder
-    except Exception as e:
-        raise Exception(f"Erro ao extrair vídeo: {str(e)}")
-
-# Função auxiliar para cache
-@lru_cache(maxsize=100)
-def get_anime_details(anime_id):
-    """Obtém detalhes completos com cache"""
-    # Implemente conforme necessário
-    return {}
+# Uso:
+# scraper = AnimeFireScraper()
+# animes = scraper.get_recent_animes()
