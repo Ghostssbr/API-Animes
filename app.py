@@ -1,32 +1,45 @@
 from flask import Flask, jsonify, request
 from scraper import get_recent_animes, get_anime_details
-import time
-from functools import lru_cache
+from functools import lru_cache, wraps
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# Cache de 5 minutos para evitar sobrecarregar o site
-@lru_cache(maxsize=32, ttl=300)
-def cached_recent_animes(page=1):
-    return get_recent_animes(page)
+# Decorador de cache com expiração
+def timed_lru_cache(seconds: int, maxsize: int = 32):
+    def wrapper_cache(func):
+        func = lru_cache(maxsize=maxsize)(func)
+        func.lifetime = timedelta(seconds=seconds)
+        func.expiration = datetime.utcnow() + func.lifetime
+
+        @wraps(func)
+        def wrapped_func(*args, **kwargs):
+            if datetime.utcnow() >= func.expiration:
+                func.cache_clear()
+                func.expiration = datetime.utcnow() + func.lifetime
+            return func(*args, **kwargs)
+        return wrapped_func
+    return wrapper_cache
 
 @app.route('/')
 def home():
     return jsonify({
         "status": "online",
-        "endpoints": {
-            "/recent": "Últimos lançamentos",
+        "routes": {
+            "/recent": "Últimos lançamentos (add ?page=2)",
             "/anime/<id>": "Detalhes do anime"
-        },
-        "repo": "github.com/seuuser/animefire-api"
+        }
     })
 
 @app.route('/recent')
+@timed_lru_cache(seconds=300)  # Cache de 5 minutos
 def recent():
-    page = request.args.get('page', default=1, type=int)
     try:
-        data = cached_recent_animes(page)
-        return jsonify({"status": "success", "data": data})
+        page = int(request.args.get('page', 1))
+        return jsonify({
+            "status": "success",
+            "data": get_recent_animes(page)
+        })
     except Exception as e:
         return jsonify({
             "status": "error",
@@ -36,8 +49,10 @@ def recent():
 @app.route('/anime/<anime_id>')
 def anime(anime_id):
     try:
-        data = get_anime_details(anime_id)
-        return jsonify({"status": "success", "data": data})
+        return jsonify({
+            "status": "success",
+            "data": get_anime_details(anime_id)
+        })
     except Exception as e:
         return jsonify({
             "status": "error",
