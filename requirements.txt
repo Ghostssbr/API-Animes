@@ -1,5 +1,5 @@
-Flask
-cloudscraper
+flask
+selenium
+undetected-chromedriver
 beautifulsoup4
 gunicorn
-python-dotenv
